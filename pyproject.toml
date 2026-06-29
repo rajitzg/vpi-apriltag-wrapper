@@ -1,0 +1,62 @@
+[build-system]
+requires = [
+    "scikit-build-core>=0.9",
+    "pybind11>=2.12",
+    "numpy>=1.20, <2.0",
+]
+build-backend = "scikit_build_core.build"
+
+# System dependencies (install before building the wheel):
+#
+#   Jetson / JetPack 6.1+:
+#     sudo apt install libnvvpi3 vpi3-dev vpi3-samples
+#
+#   Cross-compile from x86 host:
+#     Install vpi3-cross-aarch64-l4t and set VPI_ROOT accordingly.
+
+[project]
+name = "vpi-apriltag-detector"
+version = "0.1.0"
+description = "VPI 3.x AprilTag detector with preprocessing for project-otto"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10,<3.11"
+keywords = ["apriltag", "vpi", "jetson", "pybind11", "computer-vision"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: C++",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Typing :: Typed",
+]
+dependencies = [
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "Pillow>=10",
+]
+
+[tool.scikit-build]
+wheel.packages = ["vpi_apriltag_detector"]
+cmake.build-type = "Release"
+sdist.include = [
+    "vpi_apriltag_detector/__init__.pyi",
+    "vpi_apriltag_detector/_vpi_apriltag_detector.pyi",
+    "vpi_apriltag_detector/py.typed",
+]
+cmake.args = [
+    "-DCMAKE_BUILD_PARALLEL_LEVEL=4",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-markers"]
+markers = [
+    "vpi: requires VPI 3.2+ on aarch64 Linux",
+]
