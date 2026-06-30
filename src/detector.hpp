@@ -70,7 +70,8 @@ private:
     int image_height_;
     std::vector<int32_t> marker_ids_;
     int max_bits_corrected_;
-    uint64_t backends_;
+    uint64_t stream_backends_;
+    uint64_t payload_backends_;
     uint64_t submit_backend_;
 
     std::vector<uint16_t> tag_id_filter_;

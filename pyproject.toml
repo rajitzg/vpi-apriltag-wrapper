@@ -16,7 +16,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "vpi-apriltag-detector"
-version = "0.1.0"
+version = "0.1.3"
 description = "VPI 3.x AprilTag detector with preprocessing for project-otto"
 readme = "README.md"
 license = { text = "MIT" }

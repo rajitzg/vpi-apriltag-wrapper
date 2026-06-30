@@ -17,8 +17,46 @@ namespace {
 
 void check_vpi(VPIStatus status, const char* context) {
     if (status != VPI_SUCCESS) {
-        throw std::runtime_error(std::string("VPI error in ") + context + ": status " + std::to_string(status));
+        char message[VPI_MAX_STATUS_MESSAGE_LENGTH]{};
+        vpiGetLastStatusMessage(message, sizeof(message));
+        const char* status_name = vpiStatusGetName(status);
+        throw std::runtime_error(
+            std::string("VPI error in ") + context + ": " + (status_name != nullptr ? status_name : "unknown") +
+            " (" + std::to_string(status) + ")" +
+            (message[0] != '\0' ? std::string(": ") + message : ""));
     }
+}
+
+class ArrayLockGuard {
+public:
+    ArrayLockGuard(VPIArray array, VPIArrayData* data)
+        : array_(array) {
+        check_vpi(vpiArrayLockData(array_, VPI_LOCK_READ, VPI_ARRAY_BUFFER_HOST_AOS, data), "vpiArrayLockData");
+    }
+
+    ~ArrayLockGuard() {
+        if (array_ != nullptr) {
+            vpiArrayUnlock(array_);
+        }
+    }
+
+    ArrayLockGuard(const ArrayLockGuard&) = delete;
+    ArrayLockGuard& operator=(const ArrayLockGuard&) = delete;
+
+private:
+    VPIArray array_;
+};
+
+VPIImageData make_gray_image_data(int width, int height, uint8_t* gray_data) {
+    VPIImageData image_data{};
+    image_data.bufferType = VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR;
+    image_data.buffer.pitch.format = VPI_IMAGE_FORMAT_U8;
+    image_data.buffer.pitch.numPlanes = 1;
+    image_data.buffer.pitch.planes[0].data = gray_data;
+    image_data.buffer.pitch.planes[0].width = width;
+    image_data.buffer.pitch.planes[0].height = height;
+    image_data.buffer.pitch.planes[0].pitchBytes = width;
+    return image_data;
 }
 
 class ArrayLockGuard {
@@ -72,7 +110,9 @@ AprilTagDetector::AprilTagDetector(
         throw std::invalid_argument("max_bits_corrected must be non-negative");
     }
 
-    backends_ = use_pva ? (VPI_BACKEND_PVA | VPI_BACKEND_CPU) : VPI_BACKEND_CPU;
+    // Stream/image buffers need PVA+CPU when using PVA, but payload creation accepts one backend only.
+    stream_backends_ = use_pva ? (VPI_BACKEND_PVA | VPI_BACKEND_CPU) : VPI_BACKEND_CPU;
+    payload_backends_ = use_pva ? VPI_BACKEND_PVA : VPI_BACKEND_CPU;
     submit_backend_ = use_pva ? VPI_BACKEND_PVA : VPI_BACKEND_CPU;
 
     tag_id_filter_.reserve(marker_ids_.size());
@@ -88,9 +128,13 @@ AprilTagDetector::AprilTagDetector(
     decode_params_.tagIdFilter = tag_id_filter_.empty() ? nullptr : tag_id_filter_.data();
     decode_params_.tagIdFilterSize = static_cast<int32_t>(tag_id_filter_.size());
 
-    check_vpi(vpiStreamCreate(backends_, &stream_), "vpiStreamCreate");
+    check_vpi(vpiStreamCreate(stream_backends_, &stream_), "vpiStreamCreate");
     check_vpi(
-        vpiArrayCreate(static_cast<int32_t>(kMaxDetections), VPI_ARRAY_TYPE_APRILTAG_DETECTION, VPI_BACKEND_CPU, &detections_),
+        vpiArrayCreate(
+            static_cast<int32_t>(kMaxDetections),
+            VPI_ARRAY_TYPE_APRILTAG_DETECTION,
+            stream_backends_,
+            &detections_),
         "vpiArrayCreate");
 }
 
@@ -184,7 +228,7 @@ VPIPayload AprilTagDetector::get_or_create_payload(int det_width, int det_height
 
     VPIPayload payload = nullptr;
     check_vpi(
-        vpiCreateAprilTagDetector(backends_, det_width, det_height, &decode_params_, &payload),
+        vpiCreateAprilTagDetector(payload_backends_, det_width, det_height, &decode_params_, &payload),
         "vpiCreateAprilTagDetector");
     touch_payload_cache(det_width, det_height, payload);
     return payload;
