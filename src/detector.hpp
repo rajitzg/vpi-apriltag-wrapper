@@ -43,7 +43,7 @@ public:
 
 private:
     static constexpr uint32_t kMaxDetections = 64;
-    static constexpr size_t kMaxPayloadCacheEntries = 4;
+    static constexpr size_t kMaxPayloadCacheEntries = 2;
 
     struct DimensionKey {
         int width;
@@ -63,6 +63,8 @@ private:
     VPIPayload get_or_create_payload(int det_width, int det_height);
     void touch_payload_cache(int det_width, int det_height, VPIPayload payload);
     void destroy_payload_cache();
+    void sync_stream();
+    void ensure_wrapper_image(int width, int height, uint8_t* gray_data);
 
     int image_width_;
     int image_height_;
@@ -77,6 +79,8 @@ private:
     VPIStream stream_{nullptr};
     VPIArray detections_{nullptr};
     VPIImage wrapper_image_{nullptr};
+    int wrapper_width_{0};
+    int wrapper_height_{0};
     std::vector<uint8_t> gray_buffer_;
 
     std::unordered_map<DimensionKey, VPIPayload, DimensionKeyHash> payload_by_size_;

@@ -21,6 +21,38 @@ void check_vpi(VPIStatus status, const char* context) {
     }
 }
 
+class ArrayLockGuard {
+public:
+    ArrayLockGuard(VPIArray array, VPIArrayData* data)
+        : array_(array) {
+        check_vpi(vpiArrayLockData(array_, VPI_LOCK_READ, VPI_ARRAY_BUFFER_HOST_AOS, data), "vpiArrayLockData");
+    }
+
+    ~ArrayLockGuard() {
+        if (array_ != nullptr) {
+            vpiArrayUnlock(array_);
+        }
+    }
+
+    ArrayLockGuard(const ArrayLockGuard&) = delete;
+    ArrayLockGuard& operator=(const ArrayLockGuard&) = delete;
+
+private:
+    VPIArray array_;
+};
+
+VPIImageData make_gray_image_data(int width, int height, uint8_t* gray_data) {
+    VPIImageData image_data{};
+    image_data.bufferType = VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR;
+    image_data.buffer.pitch.format = VPI_IMAGE_FORMAT_U8;
+    image_data.buffer.pitch.numPlanes = 1;
+    image_data.buffer.pitch.planes[0].data = gray_data;
+    image_data.buffer.pitch.planes[0].width = width;
+    image_data.buffer.pitch.planes[0].height = height;
+    image_data.buffer.pitch.planes[0].pitchBytes = width;
+    return image_data;
+}
+
 }  // namespace
 
 AprilTagDetector::AprilTagDetector(
@@ -63,6 +95,7 @@ AprilTagDetector::AprilTagDetector(
 }
 
 AprilTagDetector::~AprilTagDetector() {
+    sync_stream();
     destroy_payload_cache();
     if (wrapper_image_ != nullptr) {
         vpiImageDestroy(wrapper_image_);
@@ -78,7 +111,39 @@ AprilTagDetector::~AprilTagDetector() {
     }
 }
 
+void AprilTagDetector::sync_stream() {
+    if (stream_ != nullptr) {
+        check_vpi(vpiStreamSync(stream_), "vpiStreamSync");
+    }
+}
+
+void AprilTagDetector::ensure_wrapper_image(int width, int height, uint8_t* gray_data) {
+    VPIImageData image_data = make_gray_image_data(width, height, gray_data);
+
+    if (wrapper_image_ != nullptr && wrapper_width_ == width && wrapper_height_ == height) {
+        check_vpi(vpiImageSetWrapper(wrapper_image_, &image_data), "vpiImageSetWrapper");
+        return;
+    }
+
+    if (wrapper_image_ != nullptr) {
+        sync_stream();
+        vpiImageDestroy(wrapper_image_);
+        wrapper_image_ = nullptr;
+        wrapper_width_ = 0;
+        wrapper_height_ = 0;
+    }
+
+    VPIImageWrapperParams wrapper_params{};
+    check_vpi(vpiInitImageWrapperParams(&wrapper_params), "vpiInitImageWrapperParams");
+    check_vpi(
+        vpiImageCreateWrapper(&image_data, &wrapper_params, backends_, &wrapper_image_),
+        "vpiImageCreateWrapper");
+    wrapper_width_ = width;
+    wrapper_height_ = height;
+}
+
 void AprilTagDetector::destroy_payload_cache() {
+    sync_stream();
     for (auto& entry : payload_by_size_) {
         if (entry.second != nullptr) {
             vpiPayloadDestroy(entry.second);
@@ -100,6 +165,7 @@ void AprilTagDetector::touch_payload_cache(int det_width, int det_height, VPIPay
         auto it = payload_by_size_.find(evict_key);
         if (it != payload_by_size_.end()) {
             if (it->second != nullptr) {
+                sync_stream();
                 vpiPayloadDestroy(it->second);
             }
             payload_by_size_.erase(it);
@@ -138,7 +204,7 @@ DetectionResult AprilTagDetector::detect(
         std::tie(roi_x0, roi_y0, roi_x1, roi_y1) = roi.value();
     }
 
-    const PreprocessResult preprocessed = preprocess_bgr(
+    PreprocessResult preprocessed = preprocess_bgr(
         bgr,
         image_width_,
         image_height_,
@@ -156,27 +222,8 @@ DetectionResult AprilTagDetector::detect(
 
     VPIPayload payload = get_or_create_payload(preprocessed.width, preprocessed.height);
 
-    if (wrapper_image_ != nullptr) {
-        vpiImageDestroy(wrapper_image_);
-        wrapper_image_ = nullptr;
-    }
-
-    gray_buffer_ = preprocessed.gray;
-
-    VPIImageData image_data{};
-    image_data.bufferType = VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR;
-    image_data.buffer.pitch.format = VPI_IMAGE_FORMAT_U8;
-    image_data.buffer.pitch.numPlanes = 1;
-    image_data.buffer.pitch.planes[0].data = gray_buffer_.data();
-    image_data.buffer.pitch.planes[0].width = preprocessed.width;
-    image_data.buffer.pitch.planes[0].height = preprocessed.height;
-    image_data.buffer.pitch.planes[0].pitchBytes = preprocessed.width;
-
-    VPIImageWrapperParams wrapper_params{};
-    check_vpi(vpiInitImageWrapperParams(&wrapper_params), "vpiInitImageWrapperParams");
-    check_vpi(
-        vpiImageCreateWrapper(&image_data, &wrapper_params, backends_, &wrapper_image_),
-        "vpiImageCreateWrapper");
+    gray_buffer_ = std::move(preprocessed.gray);
+    ensure_wrapper_image(preprocessed.width, preprocessed.height, gray_buffer_.data());
 
     check_vpi(
         vpiSubmitAprilTagDetector(
@@ -187,12 +234,10 @@ DetectionResult AprilTagDetector::detect(
             wrapper_image_,
             detections_),
         "vpiSubmitAprilTagDetector");
-    check_vpi(vpiStreamSync(stream_), "vpiStreamSync");
+    sync_stream();
 
     VPIArrayData array_data{};
-    check_vpi(
-        vpiArrayLockData(detections_, VPI_LOCK_READ, VPI_ARRAY_BUFFER_HOST_AOS, &array_data),
-        "vpiArrayLockData");
+    ArrayLockGuard array_lock(detections_, &array_data);
 
     DetectionResult result;
     const auto* detections = static_cast<const VPIAprilTagDetection*>(array_data.buffer.aos.data);
@@ -223,7 +268,6 @@ DetectionResult AprilTagDetector::detect(
         result.ids.push_back(static_cast<int32_t>(detection.id));
     }
 
-    check_vpi(vpiArrayUnlock(detections_), "vpiArrayUnlock");
     return result;
 }
 
