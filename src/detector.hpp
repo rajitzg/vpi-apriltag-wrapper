@@ -43,7 +43,7 @@ public:
 
 private:
     static constexpr uint32_t kMaxDetections = 64;
-    static constexpr size_t kMaxPayloadCacheEntries = 2;
+    static constexpr size_t kMaxPayloadCacheEntries = 4;
 
     struct DimensionKey {
         int width;
