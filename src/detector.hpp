@@ -71,12 +71,13 @@ private:
     uint64_t backends_;
     uint64_t submit_backend_;
 
-    std::vector<int32_t> tag_id_filter_;
+    std::vector<uint16_t> tag_id_filter_;
     VPIAprilTagDecodeParams decode_params_{};
 
     VPIStream stream_{nullptr};
     VPIArray detections_{nullptr};
     VPIImage wrapper_image_{nullptr};
+    std::vector<uint8_t> gray_buffer_;
 
     std::unordered_map<DimensionKey, VPIPayload, DimensionKeyHash> payload_by_size_;
     std::list<DimensionKey> payload_lru_;

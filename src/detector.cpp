@@ -2,10 +2,12 @@
 
 #include "corner_order.hpp"
 
+#include <vpi/Array.h>
 #include <vpi/Image.h>
 #include <vpi/Stream.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
 #include <stdexcept>
 
@@ -41,7 +43,13 @@ AprilTagDetector::AprilTagDetector(
     backends_ = use_pva ? (VPI_BACKEND_PVA | VPI_BACKEND_CPU) : VPI_BACKEND_CPU;
     submit_backend_ = use_pva ? VPI_BACKEND_PVA : VPI_BACKEND_CPU;
 
-    tag_id_filter_ = marker_ids_;
+    tag_id_filter_.reserve(marker_ids_.size());
+    for (const int32_t marker_id : marker_ids_) {
+        if (marker_id < 0 || marker_id > UINT16_MAX) {
+            throw std::invalid_argument("marker_ids must be in range [0, 65535]");
+        }
+        tag_id_filter_.push_back(static_cast<uint16_t>(marker_id));
+    }
     check_vpi(vpiInitAprilTagDecodeParams(&decode_params_), "vpiInitAprilTagDecodeParams");
     decode_params_.family = VPI_APRILTAG_36H11;
     decode_params_.maxBitsCorrected = max_bits_corrected_;
@@ -153,11 +161,13 @@ DetectionResult AprilTagDetector::detect(
         wrapper_image_ = nullptr;
     }
 
+    gray_buffer_ = preprocessed.gray;
+
     VPIImageData image_data{};
     image_data.bufferType = VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR;
     image_data.buffer.pitch.format = VPI_IMAGE_FORMAT_U8;
     image_data.buffer.pitch.numPlanes = 1;
-    image_data.buffer.pitch.planes[0].data = preprocessed.gray.data();
+    image_data.buffer.pitch.planes[0].data = gray_buffer_.data();
     image_data.buffer.pitch.planes[0].width = preprocessed.width;
     image_data.buffer.pitch.planes[0].height = preprocessed.height;
     image_data.buffer.pitch.planes[0].pitchBytes = preprocessed.width;
@@ -180,7 +190,9 @@ DetectionResult AprilTagDetector::detect(
     check_vpi(vpiStreamSync(stream_), "vpiStreamSync");
 
     VPIArrayData array_data{};
-    check_vpi(vpiArrayLockData(detections_, VPI_LOCK_READ, VPI_ARRAY_BUFFER_HOST, &array_data), "vpiArrayLockData");
+    check_vpi(
+        vpiArrayLockData(detections_, VPI_LOCK_READ, VPI_ARRAY_BUFFER_HOST_AOS, &array_data),
+        "vpiArrayLockData");
 
     DetectionResult result;
     const auto* detections = static_cast<const VPIAprilTagDetection*>(array_data.buffer.aos.data);
@@ -189,9 +201,9 @@ DetectionResult AprilTagDetector::detect(
     for (uint32_t i = 0; i < num_detections; ++i) {
         const VPIAprilTagDetection& detection = detections[i];
 
-        if (!marker_ids_.empty()) {
-            const auto found = std::find(marker_ids_.begin(), marker_ids_.end(), detection.id);
-            if (found == marker_ids_.end()) {
+        if (!tag_id_filter_.empty()) {
+            const auto found = std::find(tag_id_filter_.begin(), tag_id_filter_.end(), detection.id);
+            if (found == tag_id_filter_.end()) {
                 continue;
             }
         }
@@ -208,7 +220,7 @@ DetectionResult AprilTagDetector::detect(
         }
 
         result.corners.push_back(remapped);
-        result.ids.push_back(detection.id);
+        result.ids.push_back(static_cast<int32_t>(detection.id));
     }
 
     check_vpi(vpiArrayUnlock(detections_), "vpiArrayUnlock");
